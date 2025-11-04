@@ -1,148 +1,187 @@
-#include <ros/ros.h>
-#include <eigen3/Eigen/Core>
-#include <nav_msgs/Odometry.h>
-#include <mav_msgs/Actuators.h>
-#include <trajectory_msgs/MultiDOFJointTrajectoryPoint.h>
-
+#include <cmath>
 #include <fstream>
+#include <limits>
+#include <memory>
+
+#include <rclcpp/rclcpp.hpp>
+#include <Eigen/Core>
+
+#include <nav_msgs/msg/odometry.hpp>
+#include <mav_msgs/msg/actuators.hpp>
+#include <trajectory_msgs/msg/multi_dof_joint_trajectory_point.hpp>
+
 #define START_TIME 5.0
 #define SHUTDOWN_TIME 30.0
 
-class Controller_test  {
+class ControllerTest : public rclcpp::Node
+{
 public:
-    Controller_test(ros::NodeHandle nh_) : nh(nh_), maxDeviation(0.0), averageDeviation(0.0),
-                numberCalls(0), numberDeviationOutsideThreshold(0), referencePosition(0.0,0.0,0.0), minWrench(10000.0, 10.0, 10.0, 10.0), maxWrench(-10000, -10.0, -10.0, -10.0), averageWrench(0.0,0.0,0.0,0.0), numberCallsPropSpeeds(0) {
-        sub_dronePosition = nh.subscribe("current_state", 5, &Controller_test::checkDronePosition, this);
-        sub_desPosition = nh.subscribe("desired_state", 5, &Controller_test::saveReferencePosition, this);
-        sub_rotorSpeedCmds = nh.subscribe("rotor_speed_cmds", 5, &Controller_test::checkRotorSpeeds, this);
-        startup_time = ros::Time::now();
-        
-        t_checkRunTime = nh.createTimer(ros::Duration(0.1), &Controller_test::checkRunTime, this);
-        t_checkRunTime.start();
-       
-    }
+  ControllerTest()
+  : rclcpp::Node("controller_test_node"),
+    maxDeviation_(0.0),
+    averageDeviation_(0.0),
+    numberDeviationOutsideThreshold_(0),
+    numberCalls_(0),
+    numberCallsPropSpeeds_(0),
+    referencePosition_(0.0, 0.0, 0.0),
+    minWrench_(10000.0, 10.0, 10.0, 10.0),
+    maxWrench_(-10000.0, -10.0, -10.0, -10.0),
+    averageWrench_(0.0, 0.0, 0.0, 0.0)
+  {
+    startup_time_ = this->now();
 
-    void checkRunTime(const ros::TimerEvent& t) {
-        ros::Time actual_time = ros::Time::now();
-        double time = (actual_time - startup_time).toSec();
-        if(time > SHUTDOWN_TIME) {
-            writeTestResult();
-            ros::shutdown();
-        }
-    }
+    sub_dronePosition_ = this->create_subscription<nav_msgs::msg::Odometry>(
+      "current_state", rclcpp::QoS(5),
+      std::bind(&ControllerTest::checkDronePosition, this, std::placeholders::_1));
 
-    static double signed_pow2(double val) {
-        return val>0?pow(val,2):-pow(val,2);
-    }
+    sub_desPosition_ = this->create_subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>(
+      "desired_state", rclcpp::QoS(5),
+      std::bind(&ControllerTest::saveReferencePosition, this, std::placeholders::_1));
 
-    void checkRotorSpeeds(const mav_msgs::Actuators& rotor_speeds) {
-    	ros::Time actual_time = ros::Time::now();
-        double time = (actual_time - startup_time).toSec();
-        while(time < START_TIME) {
-            return;
-        }
-        numberCallsPropSpeeds++;
-    	Eigen::Vector4d props;
-        for(int i = 0; i < 4; i++) {
-            props[i] = signed_pow2(rotor_speeds.angular_velocities[i]);
-        }      
-        
-        const double d_hat = 0.3/sqrt(2);
-        const double cd = 1e-5;
-        const double cf = 1e-3;
-	    Eigen::Matrix4d F;
+    sub_rotorSpeedCmds_ = this->create_subscription<mav_msgs::msg::Actuators>(
+      "rotor_speed_cmds", rclcpp::QoS(5),
+      std::bind(&ControllerTest::checkRotorSpeeds, this, std::placeholders::_1));
 
-	    F << cf, cf, cf, cf, 
-		    cf*d_hat, cf*d_hat, -cf*d_hat, -cf*d_hat, 
-		    -cf*d_hat, cf*d_hat, cf*d_hat, -cf*d_hat,
-		    cd, -cd, cd, -cd;
+    // 10 Hz watchdog for runtime limit
+    timer_ = this->create_wall_timer(
+      std::chrono::milliseconds(100),
+      std::bind(&ControllerTest::checkRunTime, this));
 
-    
-        Eigen::Vector4d wrench = F*props;
-        averageWrench += wrench;
-        for(int i = 0; i < 4; i++) {
-            if(wrench[i] < minWrench[i])
-                minWrench[i] = wrench[i];
-            else if(wrench[i] > maxWrench[i])
-                maxWrench[i] = wrench[i];
-        }
-    }
-
-    void saveReferencePosition (const trajectory_msgs::MultiDOFJointTrajectoryPoint& des_state) {
-        geometry_msgs::Vector3 t = des_state.transforms[0].translation;
-        referencePosition << t.x, t.y, t.z;
-    }
-
-    void checkDronePosition(const nav_msgs::Odometry& cur_state) {
-        ros::Time actual_time = ros::Time::now();
-        double time = (actual_time - startup_time).toSec();
-        while(time < START_TIME) {
-            return;
-        }
-        Eigen::Vector3d dronePosition;
-        dronePosition << cur_state.pose.pose.position.x, cur_state.pose.pose.position.y, cur_state.pose.pose.position.z;
-        double deviation = (dronePosition-referencePosition).norm();
-        averageDeviation += deviation;
-        if(deviation > maxDeviation)
-            maxDeviation = deviation;
-        if(deviation > 0.5) {
-            numberDeviationOutsideThreshold++;
-        }
-        numberCalls++;
-
-    }
-
-    void writeTestResult() {
-        std::ofstream results("../../../results.txt");
-        if(!results.is_open()) {
-            ROS_ERROR_STREAM("No Results available!");
-            return;
-        }
-        if(numberCalls == 0) {
-            maxDeviation = std::nan("");
-            numberDeviationOutsideThreshold = INT_MAX;
-        }
-        if(numberCallsPropSpeeds == 0) {
-            maxWrench = {-std::nan(""),-std::nan(""),-std::nan(""),-std::nan("")};
-            minWrench = {std::nan(""),std::nan(""),std::nan(""),std::nan("")};
-        }
-        averageWrench /= numberCallsPropSpeeds;
-        results << "##########################\nResult Report:\n"
-            << "Tested drone positions: " << numberCalls << std::endl
-            << "Average deviation from optimal route: " << averageDeviation / (double)numberCalls << std::endl
-            << "Maximum deviation from optimal route: " << maxDeviation << std::endl
-            << "Number of drone positions outside flight path threshold: " << numberDeviationOutsideThreshold << std::endl
-            << "Tested rotor speed commands: " << numberCallsPropSpeeds << std::endl
-            << "Received (elementwise) average wrench: " << averageWrench[0] << ", " << averageWrench[1] << ", " << averageWrench[2] << ", " << averageWrench[3] << "\n"
-            << "Received (elementwise) maximum wrench: " << maxWrench[0] << ", " << maxWrench[1] << ", " << maxWrench[2] << ", " << maxWrench[3] << "\n"
-            << "Received (elementwise) minimum wrench: " << minWrench[0] << ", " << minWrench[1] << ", " << minWrench[2] << ", " << minWrench[3] << "\n"
-            << "##########################\n\n";
-        results.close();
-    }
+    RCLCPP_INFO(this->get_logger(), "controller_test node started.");
+  }
 
 private:
-    ros::NodeHandle nh;
-    ros::Time startup_time;
-    ros::Subscriber sub_dronePosition;
-    ros::Subscriber sub_desPosition;
-    ros::Subscriber sub_rotorSpeedCmds;
-    ros::Timer t_checkRunTime;
+  static double signed_pow2(double val) { return val >= 0 ? val * val : -val * val; }
 
-    Eigen::Vector3d referencePosition;
+  void checkRunTime()
+  {
+    const double t = (this->now() - startup_time_).seconds();
+    RCLCPP_INFO_THROTTLE(
+      this->get_logger(), *this->get_clock(), 5000 /*ms*/,
+      "controller_test running time: %.1f s", t);
+    if (t > SHUTDOWN_TIME) {
+      writeTestResult();
+      rclcpp::shutdown();
+    }
+  }
 
-    double maxDeviation;
-    double averageDeviation;
-    int numberDeviationOutsideThreshold;
-    int numberCalls;
-    unsigned long numberCallsPropSpeeds;
-    Eigen::Vector4d minWrench;
-    Eigen::Vector4d maxWrench;
-    Eigen::Vector4d averageWrench;
+  void checkRotorSpeeds(const mav_msgs::msg::Actuators::SharedPtr rotor_speeds)
+  {
+    const double t = (this->now() - startup_time_).seconds();
+    if (t < START_TIME) return;
+
+    if (rotor_speeds->angular_velocities.size() < 4) return;
+
+    numberCallsPropSpeeds_++;
+
+    Eigen::Vector4d props;
+    for (int i = 0; i < 4; ++i) {
+      props[i] = signed_pow2(rotor_speeds->angular_velocities[i]);
+    }
+
+    const double d_hat = 0.3 / std::sqrt(2.0);
+    const double cd = 1e-5;
+    const double cf = 1e-3;
+
+    Eigen::Matrix4d F;
+    F <<  cf,       cf,       cf,       cf,
+          cf*d_hat, cf*d_hat, -cf*d_hat, -cf*d_hat,
+         -cf*d_hat, cf*d_hat,  cf*d_hat, -cf*d_hat,
+          cd,      -cd,        cd,      -cd;
+
+    Eigen::Vector4d wrench = F * props;
+
+    averageWrench_ += wrench;
+    for (int i = 0; i < 4; ++i) {
+      if (wrench[i] < minWrench_[i]) minWrench_[i] = wrench[i];
+      if (wrench[i] > maxWrench_[i]) maxWrench_[i] = wrench[i];
+    }
+  }
+
+  void saveReferencePosition(const trajectory_msgs::msg::MultiDOFJointTrajectoryPoint::SharedPtr des_state)
+  {
+    if (des_state->transforms.empty()) return;
+    const auto & t = des_state->transforms[0].translation;
+    referencePosition_ << t.x, t.y, t.z;
+  }
+
+  void checkDronePosition(const nav_msgs::msg::Odometry::SharedPtr cur_state)
+  {
+    const double t = (this->now() - startup_time_).seconds();
+    if (t < START_TIME) return;
+
+    Eigen::Vector3d dronePosition(
+      cur_state->pose.pose.position.x,
+      cur_state->pose.pose.position.y,
+      cur_state->pose.pose.position.z
+    );
+
+    const double deviation = (dronePosition - referencePosition_).norm();
+    averageDeviation_ += deviation;
+    if (deviation > maxDeviation_) maxDeviation_ = deviation;
+    if (deviation > 0.5) ++numberDeviationOutsideThreshold_;
+    ++numberCalls_;
+  }
+
+  void writeTestResult()
+  {
+    std::ofstream results("../results.txt");
+    if (!results.is_open()) {
+      RCLCPP_ERROR(this->get_logger(), "No Results available (failed to open results file).");
+      return;
+    }
+
+    if (numberCalls_ == 0) {
+      maxDeviation_ = std::numeric_limits<double>::quiet_NaN();
+      numberDeviationOutsideThreshold_ = std::numeric_limits<int>::max();
+    }
+
+    if (numberCallsPropSpeeds_ == 0) {
+      const double NaN = std::numeric_limits<double>::quiet_NaN();
+      maxWrench_ = Eigen::Vector4d(-NaN, -NaN, -NaN, -NaN);
+      minWrench_ = Eigen::Vector4d(NaN, NaN, NaN, NaN);
+    } else {
+      averageWrench_ /= static_cast<double>(numberCallsPropSpeeds_);
+    }
+
+    results << "##########################\nResult Report:\n"
+            << "Tested drone positions: " << numberCalls_ << "\n"
+            << "Average deviation from optimal route: "
+            << (numberCalls_ ? (averageDeviation_ / static_cast<double>(numberCalls_)) : std::numeric_limits<double>::quiet_NaN()) << "\n"
+            << "Maximum deviation from optimal route: " << maxDeviation_ << "\n"
+            << "Number of drone positions outside flight path threshold: " << numberDeviationOutsideThreshold_ << "\n"
+            << "Tested rotor speed commands: " << numberCallsPropSpeeds_ << "\n"
+            << "Received (elementwise) average wrench: " << averageWrench_[0] << ", " << averageWrench_[1] << ", " << averageWrench_[2] << ", " << averageWrench_[3] << "\n"
+            << "Received (elementwise) maximum wrench: " << maxWrench_[0] << ", " << maxWrench_[1] << ", " << maxWrench_[2] << ", " << maxWrench_[3] << "\n"
+            << "Received (elementwise) minimum wrench: " << minWrench_[0] << ", " << minWrench_[1] << ", " << minWrench_[2] << ", " << minWrench_[3] << "\n"
+            << "##########################\n\n";
+    results.close();
+    RCLCPP_INFO(this->get_logger(), "Wrote test results to ../../../results.txt");
+  }
+
+private:
+  rclcpp::Time startup_time_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_dronePosition_;
+  rclcpp::Subscription<trajectory_msgs::msg::MultiDOFJointTrajectoryPoint>::SharedPtr sub_desPosition_;
+  rclcpp::Subscription<mav_msgs::msg::Actuators>::SharedPtr sub_rotorSpeedCmds_;
+  rclcpp::TimerBase::SharedPtr timer_;
+
+  Eigen::Vector3d referencePosition_;
+
+  double maxDeviation_;
+  double averageDeviation_;
+  int    numberDeviationOutsideThreshold_;
+  int    numberCalls_;
+  unsigned long numberCallsPropSpeeds_;
+  Eigen::Vector4d minWrench_;
+  Eigen::Vector4d maxWrench_;
+  Eigen::Vector4d averageWrench_;
 };
 
-int main(int argc, char **argv) {
-    ros::init(argc, argv, "Controller_test_node");
-    ros::NodeHandle nh;
-    Controller_test test(nh);
-    ros::spin();
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<ControllerTest>());
+  rclcpp::shutdown();
+  return 0;
 }
