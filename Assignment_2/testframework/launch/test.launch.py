@@ -1,6 +1,6 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import IncludeLaunchDescription, ExecuteProcess
+from launch.actions import IncludeLaunchDescription, ExecuteProcess, Shutdown, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -61,11 +61,17 @@ def generate_launch_description():
         # `cwd="node"` in ROS1 maps to working directory behavior in ROS2 → emulate_tty=True for proper stdout
     )
 
+    time_limit = TimerAction(
+        period=40.0,
+        actions=[Shutdown(reason="Time limit reached.")]
+    )
+
     return LaunchDescription([
         vnav_sim_node,
         traj_publisher_node,
         w_to_unity_node,
         unity_state_node,
         controller_launch,
-        test_node
+        test_node,
+        time_limit
     ])
