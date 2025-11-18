@@ -68,7 +68,7 @@ public:
         return numberGoals;
     }
 
-    const std::string filename = "catkin_ws/results.txt";
+    const std::string filename = "results.txt";
 };
 
 TEST_F(TestSuite, checkFlightTime) {

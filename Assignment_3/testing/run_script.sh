@@ -1,18 +1,18 @@
 #!/bin/bash
 if [ $1 -eq 1 ]
 then
-	source /opt/ros/noetic/setup.bash
-	cd catkin_ws
-	source devel/setup.bash
-	roslaunch testframework test.launch
-	cd ../AutSys_Labs_Testframework/Assignment_3/testing
+	source /opt/ros/jazzy/setup.bash
+	cd ros2_ws
+	source install/setup.bash
+	ros2 launch testframework test.launch.py
+	cd ../AutSys_Labs_ROS2_Testframework/Assignment_3/testing
 	mkdir build
 	cd build
 	cmake ..
 	make
 	cd ../../../..
 fi
-file="catkin_ws/results.txt"
+file="results.txt"
 echo ""
 echo ""
 if [ -f "$file" ]
@@ -21,4 +21,4 @@ then
 else
 	echo "No results available."
 fi
-./AutSys_Labs_Testframework/Assignment_3/testing/build/runTest --gtest_filter=$2
+./AutSys_Labs_ROS2_Testframework/Assignment_3/testing/build/runTest --gtest_filter=$2

@@ -1,34 +1,59 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.8)
 project(testframework)
-set(CMAKE_CXX_STANDARD 11)
 
-if(COMPILER_SUPPORTS_CXX11)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wl,--no-as-needed")
-elseif(COMPILER_SUPPORTS_CXX0X)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+# Use at least C++14 for rclcpp
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 14)
 endif()
 
-find_package(catkin REQUIRED COMPONENTS 
-  roscpp 
-  mav_msgs
-  eigen_conversions
-  mav_planning_msgs
-  tf_conversions
-  eigen_conversions
+# Find ament and ROS2 deps
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(mav_msgs REQUIRED)
+find_package(mav_planning_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
+
+# Include dirs
+include_directories(
+  include
+  ${EIGEN3_INCLUDE_DIR}
 )
 
-
-catkin_package(CATKIN_DEPENDS 
-  roscpp  
-  mav_msgs
-  mav_planning_msgs
-  tf_conversions
-  eigen_conversions
+add_executable(trajectory_test
+  src/trajectory_test.cpp
 )
 
-find_package(Eigen3)
-include_directories(include)
-include_directories(${catkin_INCLUDE_DIRS})
+target_include_directories(trajectory_test PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 
-add_executable(trajectory_test src/trajectory_test.cpp)
-target_link_libraries(trajectory_test ${catkin_LIBRARIES})
+ament_target_dependencies(trajectory_test
+  rclcpp
+  nav_msgs
+  mav_msgs
+  mav_planning_msgs
+)
+
+# Install the node binary
+install(
+  TARGETS trajectory_test
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install headers
+install(
+  DIRECTORY include/
+  DESTINATION include
+)
+
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+ament_package()

@@ -1,20 +1,15 @@
-Vertex: {
-  Vertex_1: {
-    pos: [10.0, 0.0, 3.0]
-  },
-  Vertex_2: {
-    pos: [30.0, 10.0, 3.0]
-  },
-  Vertex_3: {
-    pos: [35.0, 25.0, 13.0]
-  },
-  Vertex_4: {
-    pos: [35.0, 35.0, 6.0]
-  },
-  Vertex_5: {
-    pos: [25.0, 39.0, 11.0]
-  },
-  Vertex_6: {
-    pos: [16.0, 39.0, 11.0]
-  }
-}
+test_node:
+  ros__parameters:
+    Vertex:
+      Vertex_1:
+        pos: [10.0, 0.0, 3.0]
+      Vertex_2:
+        pos: [30.0, 10.0, 3.0]
+      Vertex_3:
+        pos: [35.0, 25.0, 13.0]
+      Vertex_4:
+        pos: [35.0, 35.0, 6.0]
+      Vertex_5:
+        pos: [25.0, 39.0, 11.0]
+      Vertex_6:
+        pos: [16.0, 39.0, 11.0]
